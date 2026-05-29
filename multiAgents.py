@@ -427,6 +427,224 @@ class NeuralAgent(Agent):
         # Devolver la mejor acción
         return successors[0][0]
 
+class AlphaBetaNeuralAgent(MultiAgentSearchAgent):
+    """
+    Agente que combina Alpha-Beta Pruning con red neuronal.
+    
+    En cada nodo del árbol de juego evalúa:
+        final_score = w_heuristic * score_heurístico + w_neural * score_red
+    
+    - Alpha-Beta explora el árbol de juego varios movimientos hacia adelante.
+    - La red neuronal aporta la experiencia aprendida de partidas anteriores.
+    - Los pesos w_heuristic y w_neural son configurables por línea de comandos.
+    """
+
+    def __init__(self, evalFn='scoreEvaluationFunction', depth='2',
+                 w_heuristic='1.0', w_neural='1.0',
+                 model_path='models/pacman_model.pth'):
+        super().__init__(evalFn, depth)
+        self.w_heuristic = float(w_heuristic)
+        self.w_neural = float(w_neural)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = None
+        self.input_size = None
+        self.idx_to_action = {
+            0: Directions.STOP,
+            1: Directions.NORTH,
+            2: Directions.SOUTH,
+            3: Directions.EAST,
+            4: Directions.WEST
+        }
+        self._load_model(model_path)
+        print(f"AlphaBetaNeuralAgent | depth={self.depth} | "
+              f"w_heuristic={self.w_heuristic} | w_neural={self.w_neural}")
+
+    def _load_model(self, model_path):
+        """Carga el modelo neuronal desde disco."""
+        try:
+            if not os.path.exists(model_path):
+                print(f"AVISO: No se encontró el modelo en {model_path}")
+                return
+            checkpoint = torch.load(model_path, map_location=self.device)
+            self.input_size = checkpoint['input_size']
+            self.model = PacmanNet(self.input_size, 128, 5).to(self.device)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.model.eval()
+            print(f"Modelo cargado desde {model_path}")
+        except Exception as e:
+            print(f"Error al cargar el modelo: {e}")
+
+    def _state_to_matrix(self, state):
+        """
+        Convierte el estado del juego en matriz numérica normalizada.
+        Codificación: 0=pared, 1=vacío, 2=comida, 3=cápsula,
+                      4=fantasma, 5=Pacman, 6=fantasma asustado.
+        Normalizada dividiendo entre 6.
+        """
+        walls = state.getWalls()
+        width, height = walls.width, walls.height
+        numeric_map = np.zeros((width, height), dtype=np.float32)
+        for x in range(width):
+            for y in range(height):
+                if not walls[x][y]:
+                    numeric_map[x][y] = 1
+        food = state.getFood()
+        for x in range(width):
+            for y in range(height):
+                if food[x][y]:
+                    numeric_map[x][y] = 2
+        for x, y in state.getCapsules():
+            numeric_map[x][y] = 3
+        for ghost_state in state.getGhostStates():
+            gx = int(ghost_state.getPosition()[0])
+            gy = int(ghost_state.getPosition()[1])
+            numeric_map[gx][gy] = 6 if ghost_state.scaredTimer > 0 else 4
+        px, py = state.getPacmanPosition()
+        numeric_map[int(px)][int(py)] = 5
+        numeric_map = numeric_map / 6.0
+        return numeric_map
+
+    def _heuristic_score(self, state):
+        """
+        Puntuación heurística con los 4 factores de la Tarea 1.
+        
+        Factor 1: Distancia a la comida más cercana (relación inversa).
+        Factor 2: Proximidad a fantasmas (penaliza cercanía, premia asustados).
+        Factor 3: Distancia a cápsulas de poder (relación inversa).
+        Factor 4: Movilidad (número de acciones legales disponibles).
+        """
+        score = state.getScore()
+        pacman_pos = state.getPacmanPosition()
+        food = state.getFood().asList()
+        ghost_states = state.getGhostStates()
+
+        # Factor 1: Distancia a la comida más cercana
+        if food:
+            min_food_dist = min(manhattanDistance(pacman_pos, f) for f in food)
+            score += 1.0 / (min_food_dist + 1)
+
+        # Factor 2: Proximidad a fantasmas
+        for ghost in ghost_states:
+            dist = manhattanDistance(pacman_pos, ghost.getPosition())
+            if ghost.scaredTimer > 0:
+                score += 50 / (dist + 1)
+            else:
+                if dist <= 2:
+                    score -= 200
+
+        # Factor 3: Cápsulas de poder
+        capsules = state.getCapsules()
+        if capsules:
+            min_cap_dist = min(manhattanDistance(pacman_pos, c) for c in capsules)
+            score += 2.0 / (min_cap_dist + 1)
+        else:
+            score += 0.5
+
+        # Factor 4: Movilidad
+        legal_actions = state.getLegalActions(0)
+        num_moves = len([a for a in legal_actions if a != Directions.STOP])
+        score += 0.5 * num_moves
+
+        return score
+
+    def _neural_score(self, state):
+        """
+        Puntuación de la red neuronal.
+        Convierte el estado a matriz, lo pasa por la red y suma
+        las probabilidades de las acciones legales × 100.
+        """
+        if self.model is None:
+            return 0
+        state_matrix = self._state_to_matrix(state)
+        state_tensor = torch.FloatTensor(state_matrix).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            output = self.model(state_tensor)
+            probs = torch.nn.functional.softmax(
+                output, dim=1).cpu().numpy()[0]
+        legal_actions = state.getLegalActions(0)
+        score = 0
+        for i, action in enumerate(self.idx_to_action.values()):
+            if action in legal_actions:
+                score += probs[i] * 100
+        return score
+
+    def _combined_evaluation(self, state):
+        """
+        Evaluación combinada final (lo que pide el enunciado):
+            final_score = w_heuristic * heurística + w_neural * red
+        """
+        return (self.w_heuristic * self._heuristic_score(state) +
+                self.w_neural * self._neural_score(state))
+
+    def getAction(self, gameState):
+        """
+        Devuelve la mejor acción usando Alpha-Beta con evaluación combinada.
+        
+        Estructura del árbol (igual que en la teoría):
+        - Pacman (agente 0): nodo MAX
+        - Fantasmas (agentes 1+): nodos MIN, en secuencia
+        - Una capa completa = Pacman + todos los fantasmas
+        - La profundidad aumenta solo cuando vuelve el turno a Pacman
+        """
+
+        def alphabeta(agentIndex, depth, state, alpha, beta):
+            # Caso base: fin del juego o profundidad máxima alcanzada
+            if state.isWin() or state.isLose() or depth == self.depth:
+                return self._combined_evaluation(state)
+            if agentIndex == 0:
+                return max_value(agentIndex, depth, state, alpha, beta)
+            else:
+                return min_value(agentIndex, depth, state, alpha, beta)
+
+        def max_value(agentIndex, depth, state, alpha, beta):
+            # Turno de Pacman: maximiza
+            # Poda cuando v > beta: el minimizador nunca permitirá este camino
+            v = float('-inf')
+            for action in state.getLegalActions(agentIndex):
+                successor = state.generateSuccessor(agentIndex, action)
+                v = max(v, alphabeta(1, depth, successor, alpha, beta))
+                if v > beta:
+                    return v
+                alpha = max(alpha, v)
+            return v
+
+        def min_value(agentIndex, depth, state, alpha, beta):
+            # Turno de fantasma: minimiza
+            # Poda cuando v < alpha: el maximizador nunca elegirá este camino
+            v = float('inf')
+            next_agent = agentIndex + 1
+            next_depth = depth
+            # Cuando el último fantasma termina, vuelve a Pacman y sube la profundidad
+            if next_agent == state.getNumAgents():
+                next_agent = 0
+                next_depth = depth + 1
+            for action in state.getLegalActions(agentIndex):
+                successor = state.generateSuccessor(agentIndex, action)
+                v = min(v, alphabeta(next_agent, next_depth,
+                                     successor, alpha, beta))
+                if v < alpha:
+                    return v
+                beta = min(beta, v)
+            return v
+
+        # Decisión raíz: Pacman elige la mejor acción
+        best_action = None
+        best_score = float('-inf')
+        alpha = float('-inf')
+        beta = float('inf')
+
+        for action in gameState.getLegalActions(0):
+            successor = gameState.generateSuccessor(0, action)
+            score = alphabeta(1, 0, successor, alpha, beta)
+            if score > best_score:
+                best_score = score
+                best_action = action
+            alpha = max(alpha, score)
+
+        return best_action
+
+
+
 # Definir una función para crear el agente
 def createNeuralAgent(model_path="models/pacman_model.pth"):
     """
