@@ -77,7 +77,7 @@ class ReflexAgent(Agent):
         newGhostStates = successorGameState.getGhostStates()
         newScaredTimes = [ghostState.scaredTimer for ghostState in newGhostStates]
 
-        "*** YOUR CODE HERE ***"
+        "* YOUR CODE HERE *"
         return successorGameState.getScore()
 
 def scoreEvaluationFunction(currentGameState: GameState):
@@ -96,7 +96,7 @@ class MultiAgentSearchAgent(Agent):
     multi-agent searchers.  Any methods defined here will be available
     to the MinimaxPacmanAgent, AlphaBetaPacmanAgent & ExpectimaxPacmanAgent.
 
-    You *do not* need to make any changes here, but you can if you want to
+    You do not need to make any changes here, but you can if you want to
     add functionality to all your adversarial search agents.  Please do not
     remove anything, however.
 
@@ -138,7 +138,7 @@ class MinimaxAgent(MultiAgentSearchAgent):
         gameState.isLose():
         Returns whether or not the game state is a losing state
         """
-        "*** YOUR CODE HERE ***"
+        "* YOUR CODE HERE *"
         util.raiseNotDefined()
 
 class AlphaBetaAgent(MultiAgentSearchAgent):
@@ -150,7 +150,7 @@ class AlphaBetaAgent(MultiAgentSearchAgent):
         """
         Returns the minimax action using self.depth and self.evaluationFunction
         """
-        "*** YOUR CODE HERE ***"
+        "* YOUR CODE HERE *"
         util.raiseNotDefined()
 
 class ExpectimaxAgent(MultiAgentSearchAgent):
@@ -165,7 +165,7 @@ class ExpectimaxAgent(MultiAgentSearchAgent):
         All ghosts should be modeled as choosing uniformly at random from their
         legal moves.
         """
-        "*** YOUR CODE HERE ***"
+        "* YOUR CODE HERE *"
         util.raiseNotDefined()
 
 def betterEvaluationFunction(currentGameState: GameState):
@@ -175,7 +175,7 @@ def betterEvaluationFunction(currentGameState: GameState):
 
     DESCRIPTION: <write something here so we know what you did>
     """
-    "*** YOUR CODE HERE ***"
+    "* YOUR CODE HERE *"
     util.raiseNotDefined()
 
 # Abbreviation
@@ -330,12 +330,33 @@ class NeuralAgent(Agent):
                 if ghost_distance <= 2:
                     score -= 200  # Gran penalización por estar demasiado cerca
         
-        # Combinar la puntuación de la red con la heurística
+        
+        # Factor 3: Cápsulas de poder.
+        # Acercarse a una cápsula es valioso porque al comerla los fantasmas
+        # se asustan y Pacman puede perseguirlos. Peso pequeño (2.0) para que
+        # Pacman no se arriesgue en exceso por conseguirla.
+        capsules = state.getCapsules()
+        if capsules:
+            min_capsule_distance = min(manhattanDistance(pacman_pos, cap) for cap in capsules)
+            score += 2.0 / (min_capsule_distance + 1)
+        else:
+            score += 0.5  # Bonus si ya no quedan cápsulas (las comió todas)
+
+        # Factor 4: Movilidad.
+        # Cuantas más direcciones tenga Pacman disponibles, mejor: significa que
+        # no está en un callejón. Un callejón con un fantasma cerca es una trampa.
+        # Peso conservador (0.5) para no hacer a Pacman demasiado cobarde.
+        num_moves = len([a for a in legal_actions if a != Directions.STOP])
+        score += 0.5 * num_moves
+
+        # Puntuación de la red neuronal: suma la probabilidad de cada acción legal
+        # multiplicada por 100 para escalarla al mismo rango que las heurísticas.
         neural_score = 0
         for i, action in enumerate(self.idx_to_action.values()):
             if action in legal_actions:
                 neural_score += probabilities[i] * 100
-        
+
+    
         return score + neural_score
 
     def getAction(self, state):
