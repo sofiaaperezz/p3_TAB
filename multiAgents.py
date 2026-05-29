@@ -330,7 +330,7 @@ class NeuralAgent(Agent):
                 if ghost_distance <= 2:
                     score -= 200  # Gran penalización por estar demasiado cerca
         
-        '''
+        
         # Factor 3: Cápsulas de poder.
         # Acercarse a una cápsula es valioso porque al comerla los fantasmas
         # se asustan y Pacman puede perseguirlos. Peso pequeño (2.0) para que
@@ -348,7 +348,7 @@ class NeuralAgent(Agent):
         # Peso conservador (0.5) para no hacer a Pacman demasiado cobarde.
         num_moves = len([a for a in legal_actions if a != Directions.STOP])
         score += 0.5 * num_moves
-        '''
+        
         
         # Puntuación de la red neuronal: suma la probabilidad de cada acción legal
         # multiplicada por 100 para escalarla al mismo rango que las heurísticas.
